@@ -1,8 +1,43 @@
 import { INTERVIEW_STATES } from '../constants/interviewStates'
 
-function UserTranscript({ transcript, transcriptHistory, state, isRecording }) {
+const FILLER_LABELS = {
+  um: 'um',
+  uh: 'uh',
+  like: 'like',
+  'you know': 'you know',
+  basically: 'basically',
+  literally: 'literally',
+}
+
+function FillerCounts({ fillerCounts }) {
+  const activeFillers = Object.entries(fillerCounts).filter(([, count]) => count > 0)
+  if (activeFillers.length === 0) return null
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-2">
+      {activeFillers.map(([key, count]) => (
+        <span
+          key={key}
+          className="font-mono rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-400"
+        >
+          {FILLER_LABELS[key]}: {count}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function UserTranscript({
+  transcript,
+  interimTranscript,
+  fillerCounts,
+  transcriptHistory,
+  state,
+  isRecording,
+}) {
   const isUserTurn = state === INTERVIEW_STATES.USER_SPEAKING
   const isAnalyzing = state === INTERVIEW_STATES.AI_ANALYZING
+  const hasLiveText = Boolean(transcript || interimTranscript)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -27,24 +62,37 @@ function UserTranscript({ transcript, transcriptHistory, state, isRecording }) {
                 </p>
                 <p className="text-sm text-mirror-muted">{entry.question}</p>
                 <p className="font-mono text-sm leading-relaxed text-white/90">
-                  {entry.answer}
+                  {entry.answer || '(no response captured)'}
                 </p>
               </div>
             ))}
           </div>
         )}
 
-        {isUserTurn && !transcript && !isRecording && (
+        {isUserTurn && !hasLiveText && !isRecording && (
           <p className="font-mono text-sm text-mirror-muted">
             Press the record button when you are ready to respond...
           </p>
         )}
 
         {isRecording && (
-          <p className="font-mono text-sm text-mirror-accent transcript-typing">
-            Listening...
-            <span className="typing-cursor">|</span>
-          </p>
+          <>
+            <FillerCounts fillerCounts={fillerCounts} />
+            {hasLiveText ? (
+              <p className="font-mono text-sm leading-relaxed text-white/90 transcript-typing">
+                {transcript}
+                {interimTranscript && (
+                  <span className="text-mirror-accent/70">{transcript ? ' ' : ''}{interimTranscript}</span>
+                )}
+                <span className="typing-cursor text-mirror-accent">|</span>
+              </p>
+            ) : (
+              <p className="font-mono text-sm text-mirror-accent transcript-typing">
+                Listening...
+                <span className="typing-cursor">|</span>
+              </p>
+            )}
+          </>
         )}
 
         {transcript && !isRecording && (

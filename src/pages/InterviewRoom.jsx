@@ -3,6 +3,7 @@ import UserTranscript from '../components/UserTranscript'
 import WaveformVisualizer from '../components/WaveformVisualizer'
 import { INTERVIEW_STATES, STATE_LABELS } from '../constants/interviewStates'
 import { useInterviewStateMachine } from '../hooks/useInterviewStateMachine'
+import FeedbackDashboard from './FeedbackDashboard'
 
 function formatTime(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60)
@@ -10,7 +11,7 @@ function formatTime(totalSeconds) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
-function InterviewRoom({ role, onExit }) {
+function InterviewRoom({ role, onExit, onRestart }) {
   const {
     state,
     questionIndex,
@@ -18,6 +19,10 @@ function InterviewRoom({ role, onExit }) {
     currentQuestion,
     isRecording,
     transcript,
+    interimTranscript,
+    fillerCounts,
+    isSpeechSupported,
+    speechError,
     transcriptHistory,
     elapsedSeconds,
     progress,
@@ -25,7 +30,19 @@ function InterviewRoom({ role, onExit }) {
     toggleRecording,
   } = useInterviewStateMachine(role)
 
-  const canRecord = state === INTERVIEW_STATES.USER_SPEAKING
+  const canRecord = state === INTERVIEW_STATES.USER_SPEAKING && isSpeechSupported
+
+  if (state === INTERVIEW_STATES.INTERVIEW_COMPLETE) {
+    return (
+      <FeedbackDashboard
+        role={role}
+        transcriptHistory={transcriptHistory}
+        elapsedSeconds={elapsedSeconds}
+        onRestart={onRestart}
+        onBackToRoles={onExit}
+      />
+    )
+  }
 
   return (
     <div className="flex min-h-svh flex-col bg-mirror-bg">
@@ -58,6 +75,20 @@ function InterviewRoom({ role, onExit }) {
           </button>
         </div>
       </header>
+
+      {!isSpeechSupported && (
+        <div className="mx-6 mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+          <p className="font-mono text-xs text-amber-300">
+            Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari for the interview experience.
+          </p>
+        </div>
+      )}
+
+      {speechError && (
+        <div className="mx-6 mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3">
+          <p className="font-mono text-xs text-red-300">{speechError.message}</p>
+        </div>
+      )}
 
       <div className="px-6 pt-4">
         <div className="mb-2 flex items-center justify-between">
@@ -104,6 +135,8 @@ function InterviewRoom({ role, onExit }) {
           <div className="flex min-h-0 flex-1 flex-col px-6 py-4">
             <UserTranscript
               transcript={transcript}
+              interimTranscript={interimTranscript}
+              fillerCounts={fillerCounts}
               transcriptHistory={transcriptHistory}
               state={state}
               isRecording={isRecording}
@@ -138,11 +171,13 @@ function InterviewRoom({ role, onExit }) {
               <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-mirror-muted">
                 {isRecording
                   ? 'tap to stop'
-                  : canRecord
-                    ? 'tap to record'
-                    : isComplete
-                      ? 'interview complete'
-                      : 'wait for your turn'}
+                  : !isSpeechSupported
+                    ? 'speech not supported'
+                    : canRecord
+                      ? 'tap to record'
+                      : isComplete
+                        ? 'interview complete'
+                        : 'wait for your turn'}
               </p>
             </div>
           </div>
