@@ -1,0 +1,78 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-mirror-bg: #0a0a0f;
+  --color-mirror-accent: #00f5ff;
+  --color-mirror-surface: #12121a;
+  --color-mirror-border: #1e1e2e;
+  --color-mirror-muted: #6b7280;
+  --font-heading: 'Syne', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100svh;
+    background-color: var(--color-mirror-bg);
+    color: #e5e7eb;
+    font-family: var(--font-heading);
+  }
+
+  #root {
+    min-height: 100svh;
+  }
+}
+
+@layer utilities {
+  .glow-hover {
+    transition:
+      box-shadow 0.3s ease,
+      border-color 0.3s ease,
+      transform 0.3s ease;
+  }
+
+  .glow-hover:hover {
+    border-color: color-mix(in srgb, var(--color-mirror-accent) 60%, transparent);
+    box-shadow:
+      0 0 20px color-mix(in srgb, var(--color-mirror-accent) 25%, transparent),
+      0 0 40px color-mix(in srgb, var(--color-mirror-accent) 10%, transparent);
+    transform: translateY(-2px);
+  }
+
+  .glow-selected {
+    border-color: var(--color-mirror-accent);
+    box-shadow:
+      0 0 24px color-mix(in srgb, var(--color-mirror-accent) 35%, transparent),
+      inset 0 0 20px color-mix(in srgb, var(--color-mirror-accent) 8%, transparent);
+  }
+
+  .btn-glow {
+    transition:
+      box-shadow 0.3s ease,
+      transform 0.2s ease,
+      opacity 0.2s ease;
+  }
+
+  .btn-glow:not(:disabled):hover {
+    box-shadow:
+      0 0 24px color-mix(in srgb, var(--color-mirror-accent) 50%, transparent),
+      0 0 48px color-mix(in srgb, var(--color-mirror-accent) 20%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .btn-glow:not(:disabled):active {
+    transform: translateY(0);
+  }
+}
