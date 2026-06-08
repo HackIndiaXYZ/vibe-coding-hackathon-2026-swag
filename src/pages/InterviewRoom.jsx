@@ -27,6 +27,9 @@ function InterviewRoom({ role, onExit, onRestart }) {
     elapsedSeconds,
     progress,
     isComplete,
+    isAiLoading,
+    aiError,
+    retryAiAction,
     toggleRecording,
   } = useInterviewStateMachine(role)
 
@@ -90,6 +93,22 @@ function InterviewRoom({ role, onExit, onRestart }) {
         </div>
       )}
 
+      {aiError && (
+        <div className="mx-6 mt-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+          <p className="font-mono text-xs text-amber-300">{aiError.message}</p>
+          {aiError.canRetry && (
+            <button
+              type="button"
+              onClick={retryAiAction}
+              disabled={isAiLoading}
+              className="btn-glow font-mono shrink-0 rounded-lg border border-mirror-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-mirror-muted hover:border-mirror-accent/50 hover:text-white disabled:opacity-50"
+            >
+              {isAiLoading ? 'loading...' : 'retry'}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="px-6 pt-4">
         <div className="mb-2 flex items-center justify-between">
           <span className="font-mono text-[10px] uppercase tracking-wider text-mirror-muted">
@@ -115,7 +134,11 @@ function InterviewRoom({ role, onExit, onRestart }) {
             </span>
           </div>
           <AIMessage
-            message={currentQuestion}
+            message={
+              isAiLoading && state === INTERVIEW_STATES.AI_ANALYZING
+                ? 'Analyzing your response and preparing the next question...'
+                : currentQuestion
+            }
             state={state}
             questionIndex={questionIndex}
             totalQuestions={totalQuestions}

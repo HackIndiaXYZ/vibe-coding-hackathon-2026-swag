@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { INTERVIEW_STATES } from '../constants/interviewStates'
-import { getQuestionsForRole } from '../constants/mockQuestions'
+import {
+  generateNextQuestion,
+  INTERVIEW_TARGET_QUESTIONS,
+  isGeminiConfigured,
+} from '../services/geminiService'
 import { countFillerWords, useSpeechRecognition } from './useSpeechRecognition'
 
 function estimateSpeakingDuration(text) {
@@ -17,18 +21,19 @@ function logTransition(label, detail) {
 }
 
 export function useInterviewStateMachine(role) {
-  const questions = useMemo(
-    () => getQuestionsForRole(role?.id),
-    [role?.id],
-  )
   const [state, setState] = useState(INTERVIEW_STATES.IDLE)
   const [questionIndex, setQuestionIndex] = useState(0)
+  const [currentQuestion, setCurrentQuestion] = useState('')
   const [submittedTranscript, setSubmittedTranscript] = useState('')
   const [transcriptHistory, setTranscriptHistory] = useState([])
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [isAiLoading, setIsAiLoading] = useState(false)
+  const [aiError, setAiError] = useState(null)
   const timerRef = useRef(null)
   const transitionRef = useRef(null)
   const idleBootstrapRef = useRef(null)
+  const mountedRef = useRef(true)
+  const lastAiActionRef = useRef(null)
 
   const {
     isSupported: isSpeechSupported,
@@ -43,11 +48,19 @@ export function useInterviewStateMachine(role) {
     getFullTranscript,
   } = useSpeechRecognition()
 
-  const currentQuestion = questions[questionIndex] ?? ''
-  const progress = ((questionIndex + (state === INTERVIEW_STATES.AI_ANALYZING ? 1 : 0)) / questions.length) * 100
+  const progress = Math.min(
+    100,
+    state === INTERVIEW_STATES.INTERVIEW_COMPLETE
+      ? 100
+      : ((questionIndex + (state === INTERVIEW_STATES.AI_ANALYZING ? 1 : 0)) /
+          INTERVIEW_TARGET_QUESTIONS) *
+        100,
+  )
+
   const isComplete =
     state === INTERVIEW_STATES.INTERVIEW_COMPLETE ||
-    (questionIndex >= questions.length - 1 && state === INTERVIEW_STATES.AI_ANALYZING)
+    (questionIndex >= INTERVIEW_TARGET_QUESTIONS - 1 &&
+      state === INTERVIEW_STATES.AI_ANALYZING)
 
   const clearScheduledTransition = useCallback(() => {
     if (transitionRef.current) {
@@ -64,18 +77,27 @@ export function useInterviewStateMachine(role) {
   }, [])
 
   useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
     logTransition(`state → ${state}`)
   }, [state])
 
   const beginAiSpeaking = useCallback(
-    (index = questionIndex) => {
-      logTransition('transition → AI_SPEAKING', { questionIndex: index })
+    (questionText) => {
+      const question = questionText?.trim() ?? ''
+      logTransition('transition → AI_SPEAKING', { questionIndex })
+      setCurrentQuestion(question)
       setState(INTERVIEW_STATES.AI_SPEAKING)
       setSubmittedTranscript('')
       resetTranscript()
       stopListening()
 
-      const duration = estimateSpeakingDuration(questions[index] ?? '')
+      const duration = estimateSpeakingDuration(question || 'Preparing question')
       clearScheduledTransition()
       logTransition('scheduling AI_SPEAKING → USER_SPEAKING', { durationMs: duration })
       transitionRef.current = setTimeout(() => {
@@ -83,8 +105,114 @@ export function useInterviewStateMachine(role) {
         setState(INTERVIEW_STATES.USER_SPEAKING)
       }, duration)
     },
-    [clearScheduledTransition, questionIndex, questions, resetTranscript, stopListening],
+    [clearScheduledTransition, questionIndex, resetTranscript, stopListening],
   )
+
+  const fetchAndPresentQuestion = useCallback(
+    async (history) => {
+      setIsAiLoading(true)
+      setAiError(null)
+      lastAiActionRef.current = { type: 'question', history }
+
+      try {
+        const result = await generateNextQuestion({ role, transcriptHistory: history })
+
+        if (!mountedRef.current) return
+
+        if (result.source === 'mock' && isGeminiConfigured()) {
+          setAiError({
+            message: 'AI unavailable — using offline interview questions.',
+            canRetry: true,
+          })
+        }
+
+        if (result.shouldEndInterview) {
+          logTransition('transition → INTERVIEW_COMPLETE')
+          setState(INTERVIEW_STATES.INTERVIEW_COMPLETE)
+          return
+        }
+
+        if (history.length > 0) {
+          setQuestionIndex((prev) => prev + 1)
+        }
+
+        beginAiSpeaking(result.question)
+      } catch (error) {
+        if (!mountedRef.current) return
+
+        setAiError({
+          message: error.message || 'Failed to load AI question.',
+          canRetry: true,
+        })
+      } finally {
+        if (mountedRef.current) {
+          setIsAiLoading(false)
+        }
+      }
+    },
+    [beginAiSpeaking, role],
+  )
+
+  const processAnswer = useCallback(
+    async (updatedHistory) => {
+      logTransition('transition → AI_ANALYZING')
+      setState(INTERVIEW_STATES.AI_ANALYZING)
+      setIsAiLoading(true)
+      setAiError(null)
+      lastAiActionRef.current = { type: 'answer', history: updatedHistory }
+
+      try {
+        const result = await generateNextQuestion({
+          role,
+          transcriptHistory: updatedHistory,
+        })
+
+        if (!mountedRef.current) return
+
+        if (result.source === 'mock' && isGeminiConfigured()) {
+          setAiError({
+            message: 'AI unavailable — using offline interview questions.',
+            canRetry: true,
+          })
+        }
+
+        if (result.shouldEndInterview) {
+          logTransition('transition → INTERVIEW_COMPLETE')
+          setState(INTERVIEW_STATES.INTERVIEW_COMPLETE)
+          return
+        }
+
+        setQuestionIndex((prev) => prev + 1)
+        beginAiSpeaking(result.question)
+      } catch (error) {
+        if (!mountedRef.current) return
+
+        setAiError({
+          message: error.message || 'Failed to analyze your response.',
+          canRetry: true,
+        })
+      } finally {
+        if (mountedRef.current) {
+          setIsAiLoading(false)
+        }
+      }
+    },
+    [beginAiSpeaking, role],
+  )
+
+  const retryAiAction = useCallback(() => {
+    const lastAction = lastAiActionRef.current
+    if (!lastAction) return
+
+    if (lastAction.type === 'question') {
+      fetchAndPresentQuestion(lastAction.history)
+      return
+    }
+
+    if (lastAction.type === 'answer') {
+      processAnswer(lastAction.history)
+    }
+  }, [fetchAndPresentQuestion, processAnswer])
 
   useEffect(() => {
     timerRef.current = setInterval(() => {
@@ -106,17 +234,17 @@ export function useInterviewStateMachine(role) {
   useEffect(() => {
     if (state !== INTERVIEW_STATES.IDLE) return
 
-    logTransition('scheduling IDLE → AI_SPEAKING', { delayMs: 1200 })
+    logTransition('scheduling IDLE → fetch first question', { delayMs: 1200 })
     idleBootstrapRef.current = setTimeout(() => {
-      logTransition('IDLE bootstrap complete → beginAiSpeaking')
-      beginAiSpeaking()
+      logTransition('IDLE bootstrap complete → fetch first question')
+      fetchAndPresentQuestion([])
     }, 1200)
 
     return clearIdleBootstrap
-  }, [beginAiSpeaking, clearIdleBootstrap, state])
+  }, [clearIdleBootstrap, fetchAndPresentQuestion, state])
 
   const toggleRecording = useCallback(() => {
-    if (state !== INTERVIEW_STATES.USER_SPEAKING) return
+    if (state !== INTERVIEW_STATES.USER_SPEAKING || isAiLoading) return
 
     if (!isListening) {
       resetTranscript()
@@ -130,45 +258,34 @@ export function useInterviewStateMachine(role) {
     stopListening()
 
     setSubmittedTranscript(finalAnswer)
-    setTranscriptHistory((prev) => [
-      ...prev,
+    const updatedHistory = [
+      ...transcriptHistory,
       { question: currentQuestion, answer: finalAnswer, fillerCounts: finalFillerCounts },
-    ])
-    logTransition('transition → AI_ANALYZING')
-    setState(INTERVIEW_STATES.AI_ANALYZING)
-
+    ]
+    setTranscriptHistory(updatedHistory)
     clearScheduledTransition()
-    logTransition('scheduling AI_ANALYZING → next question', { delayMs: 2800 })
-    transitionRef.current = setTimeout(() => {
-      if (questionIndex < questions.length - 1) {
-        const nextIndex = questionIndex + 1
-        logTransition('advancing to next question', { nextIndex })
-        setQuestionIndex(nextIndex)
-        beginAiSpeaking(nextIndex)
-      } else {
-        logTransition('transition → INTERVIEW_COMPLETE')
-        setState(INTERVIEW_STATES.INTERVIEW_COMPLETE)
-      }
-    }, 2800)
+    processAnswer(updatedHistory)
   }, [
-    beginAiSpeaking,
     clearScheduledTransition,
     currentQuestion,
     getFullTranscript,
+    isAiLoading,
     isListening,
-    questionIndex,
-    questions.length,
+    processAnswer,
     resetTranscript,
     startListening,
     state,
     stopListening,
+    transcriptHistory,
   ])
 
   return {
     state,
     questionIndex,
-    totalQuestions: questions.length,
-    currentQuestion,
+    totalQuestions: INTERVIEW_TARGET_QUESTIONS,
+    currentQuestion: isAiLoading && state === INTERVIEW_STATES.IDLE
+      ? 'Initializing interview session...'
+      : currentQuestion,
     isRecording: isListening,
     transcript: isListening ? liveTranscript : submittedTranscript,
     interimTranscript: isListening ? interimTranscript : '',
@@ -179,6 +296,9 @@ export function useInterviewStateMachine(role) {
     elapsedSeconds,
     progress,
     isComplete,
+    isAiLoading,
+    aiError,
+    retryAiAction,
     toggleRecording,
   }
 }

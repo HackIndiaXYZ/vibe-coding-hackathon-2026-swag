@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import ConfidenceChart from '../components/ConfidenceChart'
 import ScoreCard from '../components/ScoreCard'
 import { generateMockFeedback } from '../constants/mockFeedback'
+import { generateInterviewFeedback } from '../services/geminiService'
 
 function useCountUp(target, durationMs = 1600) {
   const [value, setValue] = useState(0)
@@ -87,13 +88,87 @@ function FeedbackDashboard({
   onRestart,
   onBackToRoles,
 }) {
-  const feedback = useMemo(
-    () => generateMockFeedback({ role, transcriptHistory, elapsedSeconds }),
-    [role, transcriptHistory, elapsedSeconds],
-  )
+  const [feedback, setFeedback] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+
+  const loadFeedback = useCallback(async () => {
+    setIsLoading(true)
+    setLoadError(null)
+
+    try {
+      const result = await generateInterviewFeedback({
+        role,
+        transcriptHistory,
+        elapsedSeconds,
+      })
+      setFeedback(result)
+
+      if (result.source === 'mock') {
+        setLoadError('AI feedback unavailable — showing offline analysis.')
+      }
+    } catch {
+      setFeedback(generateMockFeedback({ role, transcriptHistory, elapsedSeconds }))
+      setLoadError('Failed to load AI feedback — showing offline analysis.')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [role, transcriptHistory, elapsedSeconds])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchFeedback() {
+      setIsLoading(true)
+      setLoadError(null)
+
+      try {
+        const result = await generateInterviewFeedback({
+          role,
+          transcriptHistory,
+          elapsedSeconds,
+        })
+        if (cancelled) return
+        setFeedback(result)
+        if (result.source === 'mock') {
+          setLoadError('AI feedback unavailable — showing offline analysis.')
+        }
+      } catch {
+        if (cancelled) return
+        setFeedback(generateMockFeedback({ role, transcriptHistory, elapsedSeconds }))
+        setLoadError('Failed to load AI feedback — showing offline analysis.')
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    }
+
+    fetchFeedback()
+    return () => {
+      cancelled = true
+    }
+  }, [role, transcriptHistory, elapsedSeconds])
+
+  const animatedOverall = useCountUp(feedback?.scores?.overall ?? 0, 1600)
+
+  if (isLoading || !feedback) {
+    return (
+      <div className="flex min-h-svh flex-col items-center justify-center bg-mirror-bg px-6">
+        <div className="feedback-card-glow max-w-md rounded-xl border border-mirror-border bg-mirror-surface/80 p-8 text-center backdrop-blur-sm">
+          <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-mirror-accent/70">
+            // analyzing_session
+          </p>
+          <h1 className="mt-4 font-heading text-2xl font-bold text-white">
+            Generating Feedback
+          </h1>
+          <p className="mt-3 font-mono text-sm text-mirror-muted animate-pulse">
+            Gemini is reviewing your interview responses...
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const { scores, fillerStats, totalFillerCount } = feedback
-  const animatedOverall = useCountUp(scores.overall)
 
   return (
     <div className="min-h-svh bg-mirror-bg">
@@ -109,6 +184,7 @@ function FeedbackDashboard({
             <p className="mt-2 font-mono text-sm text-mirror-muted">
               {feedback.roleTitle} · {feedback.questionsAnswered} questions ·{' '}
               {formatTime(feedback.elapsedSeconds)} elapsed
+              {feedback.source === 'gemini' ? ' · AI analysis' : ' · offline analysis'}
             </p>
           </div>
 
@@ -122,6 +198,19 @@ function FeedbackDashboard({
           </div>
         </div>
       </header>
+
+      {loadError && (
+        <div className="mx-auto mt-4 flex max-w-6xl items-center justify-between gap-4 px-6">
+          <p className="font-mono text-xs text-amber-300">{loadError}</p>
+          <button
+            type="button"
+            onClick={loadFeedback}
+            className="btn-glow font-mono shrink-0 rounded-lg border border-mirror-border px-4 py-2 text-xs uppercase tracking-wider text-mirror-muted hover:border-mirror-accent/50 hover:text-white"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
