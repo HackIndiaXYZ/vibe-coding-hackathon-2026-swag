@@ -34,6 +34,7 @@ export function useInterviewStateMachine(role) {
   const idleBootstrapRef = useRef(null)
   const mountedRef = useRef(true)
   const lastAiActionRef = useRef(null)
+  const hasInitialFetchStartedRef = useRef(false)
 
   const {
     isSupported: isSpeechSupported,
@@ -233,9 +234,13 @@ export function useInterviewStateMachine(role) {
 
   useEffect(() => {
     if (state !== INTERVIEW_STATES.IDLE) return
+    if (hasInitialFetchStartedRef.current) return
 
     logTransition('scheduling IDLE → fetch first question', { delayMs: 1200 })
     idleBootstrapRef.current = setTimeout(() => {
+      if (hasInitialFetchStartedRef.current) return
+      hasInitialFetchStartedRef.current = true
+
       logTransition('IDLE bootstrap complete → fetch first question')
       fetchAndPresentQuestion([])
     }, 1200)

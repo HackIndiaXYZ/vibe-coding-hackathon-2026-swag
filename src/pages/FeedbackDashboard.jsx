@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ConfidenceChart from '../components/ConfidenceChart'
 import ScoreCard from '../components/ScoreCard'
 import { generateMockFeedback } from '../constants/mockFeedback'
@@ -91,62 +91,62 @@ function FeedbackDashboard({
   const [feedback, setFeedback] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
+  const hasLoadFeedbackStartedRef = useRef(false)
 
-  const loadFeedback = useCallback(async () => {
-    setIsLoading(true)
-    setLoadError(null)
+const loadFeedback = useCallback(async () => {
+  console.log('[Feedback] loadFeedback started')
 
-    try {
-      const result = await generateInterviewFeedback({
-        role,
-        transcriptHistory,
-        elapsedSeconds,
-      })
-      setFeedback(result)
+  setIsLoading(true)
+  setLoadError(null)
 
-      if (result.source === 'mock') {
-        setLoadError('AI feedback unavailable — showing offline analysis.')
-      }
-    } catch {
-      setFeedback(generateMockFeedback({ role, transcriptHistory, elapsedSeconds }))
-      setLoadError('Failed to load AI feedback — showing offline analysis.')
-    } finally {
-      setIsLoading(false)
+  try {
+    console.log('[Feedback] calling generateInterviewFeedback')
+
+    const result = await generateInterviewFeedback({
+      role,
+      transcriptHistory,
+      elapsedSeconds,
+    })
+
+    console.log('[Feedback] result received:', result)
+
+    setFeedback(result)
+
+    console.log('[Feedback] feedback state updated')
+
+    if (result.source === 'mock') {
+      setLoadError('AI feedback unavailable — showing offline analysis.')
     }
-  }, [role, transcriptHistory, elapsedSeconds])
+
+  } catch (error) {
+
+    console.error('[Feedback] ERROR:', error)
+
+    const mock = generateMockFeedback({
+      role,
+      transcriptHistory,
+      elapsedSeconds,
+    })
+
+    console.log('[Feedback] fallback mock:', mock)
+
+    setFeedback(mock)
+
+    setLoadError('Failed to load AI feedback — showing offline analysis.')
+
+  } finally {
+
+    console.log('[Feedback] loading finished')
+
+    setIsLoading(false)
+  }
+}, [])
 
   useEffect(() => {
-    let cancelled = false
-
-    async function fetchFeedback() {
-      setIsLoading(true)
-      setLoadError(null)
-
-      try {
-        const result = await generateInterviewFeedback({
-          role,
-          transcriptHistory,
-          elapsedSeconds,
-        })
-        if (cancelled) return
-        setFeedback(result)
-        if (result.source === 'mock') {
-          setLoadError('AI feedback unavailable — showing offline analysis.')
-        }
-      } catch {
-        if (cancelled) return
-        setFeedback(generateMockFeedback({ role, transcriptHistory, elapsedSeconds }))
-        setLoadError('Failed to load AI feedback — showing offline analysis.')
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    }
-
-    fetchFeedback()
-    return () => {
-      cancelled = true
-    }
-  }, [role, transcriptHistory, elapsedSeconds])
+    if (hasLoadFeedbackStartedRef.current) return
+    hasLoadFeedbackStartedRef.current = true
+    loadFeedback()
+  }, [])
 
   const animatedOverall = useCountUp(feedback?.scores?.overall ?? 0, 1600)
 

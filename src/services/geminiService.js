@@ -5,6 +5,14 @@ const MODEL = 'gemini-2.5-flash'
 const API_BASE = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`
 const MAX_RETRIES = 2
 const INTERVIEW_TARGET_ROUNDS = 3
+const REFILL_BATCH_MIN = 3
+const REFILL_BATCH_MAX = 5
+
+/** In-memory question cache for the active interview session. */
+const questionCache = {
+  roleId: null,
+  questions: [],
+}
 
 function getApiKey() {
   return import.meta.env.VITE_GEMINI_API_KEY?.trim() ?? ''
@@ -18,9 +26,14 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function resetQuestionCache(roleId) {
+  questionCache.roleId = roleId ?? null
+  questionCache.questions = []
+}
+
 function formatTranscriptHistory(transcriptHistory) {
   if (!transcriptHistory.length) {
-    return 'No previous exchanges. This is the opening question.'
+    return 'No previous exchanges.'
   }
 
   return transcriptHistory
@@ -36,6 +49,42 @@ function extractJson(text) {
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
   const candidate = fenced ? fenced[1].trim() : trimmed
   return JSON.parse(candidate)
+}
+
+function parseRetryDelayMs(errorBody) {
+  let parsed
+
+  try {
+    parsed = typeof errorBody === 'string' ? JSON.parse(errorBody) : errorBody
+  } catch {
+    return null
+  }
+
+  const details = parsed?.error?.details
+  if (!Array.isArray(details)) return null
+
+  for (const detail of details) {
+    const retryDelay = detail?.retryDelay
+    if (retryDelay == null) continue
+
+    if (typeof retryDelay === 'string') {
+      const seconds = parseFloat(retryDelay.replace(/s$/i, ''))
+      if (!Number.isNaN(seconds)) return Math.ceil(seconds * 1000)
+    }
+
+    if (typeof retryDelay === 'number') {
+      return Math.ceil(retryDelay * 1000)
+    }
+  }
+
+  return null
+}
+
+function createGeminiError(status, errorBody) {
+  const error = new Error(`Gemini API error (${status}): ${errorBody}`)
+  error.status = status
+  error.body = errorBody
+  return error
 }
 
 async function callGemini(prompt, { responseSchema } = {}) {
@@ -64,7 +113,7 @@ async function callGemini(prompt, { responseSchema } = {}) {
 
   if (!response.ok) {
     const errorBody = await response.text()
-    throw new Error(`Gemini API error (${response.status}): ${errorBody}`)
+    throw createGeminiError(response.status, errorBody)
   }
 
   const data = await response.json()
@@ -85,41 +134,76 @@ async function withRetry(operation) {
       return await operation()
     } catch (error) {
       lastError = error
-      if (attempt < MAX_RETRIES) {
-        await delay(800 * (attempt + 1))
+
+      if (attempt >= MAX_RETRIES) break
+
+      if (error.status === 429) {
+        const retryMs = parseRetryDelayMs(error.body)
+        if (!retryMs) {
+          console.warn(
+            '[geminiService] 429 rate limit hit but no retryDelay in response — cannot retry',
+          )
+          break
+        }
+
+        console.warn(
+          `[geminiService] 429 rate limited — waiting ${retryMs}ms (retryDelay from API) before retry ${attempt + 1}/${MAX_RETRIES}`,
+        )
+        await delay(retryMs)
+        continue
       }
+
+      continue
     }
   }
 
   throw lastError
 }
 
-function buildInterviewerPrompt({ role, transcriptHistory }) {
-  const roundsCompleted = transcriptHistory.length
-  const isOpening = roundsCompleted === 0
-
-  return `You are a professional interviewer conducting a realistic ${role?.title ?? 'job'} interview.
+function buildInitialQuestionsPrompt(role) {
+  return `You are a professional interviewer preparing questions for a ${role?.title ?? 'job'} mock interview.
 
 Role track: ${role?.label ?? 'GENERAL'}
 Role focus: ${role?.description ?? 'General professional interview'}
 
-Behavior rules:
-- Ask exactly ONE concise question at a time (1-2 sentences max, no preamble)
-- Ask realistic, role-specific interview questions
-- If the candidate's last answer was vague, shallow, or missing specifics, ask a sharp follow-up that challenges them
-- Use follow-ups to probe depth before moving to a new topic
-- When an answer is strong and complete, move to a new topic
-- Aim for about ${INTERVIEW_TARGET_ROUNDS} substantive question rounds total
-- Set shouldEndInterview to true after ${INTERVIEW_TARGET_ROUNDS} completed Q&A rounds unless one critical follow-up is absolutely necessary
-- Never repeat a question that was already asked
-
-${isOpening ? 'Generate the opening interview question.' : `Interview transcript so far:\n${formatTranscriptHistory(transcriptHistory)}\n\nGenerate the next question based on the candidate's last answer.`}
+Generate exactly ${INTERVIEW_TARGET_ROUNDS} realistic interview questions for the full session.
+Rules:
+- Each question must be concise (1-2 sentences, no preamble)
+- Questions must be role-specific and realistic
+- Order from accessible warm-up to deeper assessment
+- Mark follow-up style probes with isFollowUp: true when they probe vagueness from a prior topic
+- Do not repeat topics unnecessarily
 
 Respond with JSON only:
 {
-  "question": "string",
-  "shouldEndInterview": boolean,
-  "isFollowUp": boolean
+  "questions": [
+    { "question": "string", "isFollowUp": boolean }
+  ]
+}`
+}
+
+function buildRefillQuestionsPrompt(role, transcriptHistory) {
+  return `You are a professional interviewer continuing a ${role?.title ?? 'job'} mock interview.
+
+Role track: ${role?.label ?? 'GENERAL'}
+Role focus: ${role?.description ?? 'General professional interview'}
+
+The interview has used more questions than expected. Generate ${REFILL_BATCH_MIN} to ${REFILL_BATCH_MAX} additional questions in a single batch.
+
+Rules:
+- Each question must be concise (1-2 sentences)
+- Base follow-ups on vague or shallow answers in the transcript
+- Challenge weak answers; move to new topics when answers are strong
+- Never repeat a question already asked
+
+Interview transcript so far:
+${formatTranscriptHistory(transcriptHistory)}
+
+Respond with JSON only:
+{
+  "questions": [
+    { "question": "string", "isFollowUp": boolean }
+  ]
 }`
 }
 
@@ -158,13 +242,15 @@ function clampScore(value) {
   return Math.max(45, Math.min(98, Math.round(Number(value) || 0)))
 }
 
-function normalizeQuestionResponse(raw) {
-  const question = String(raw?.question ?? '').trim()
-  return {
-    question,
-    shouldEndInterview: Boolean(raw?.shouldEndInterview),
-    isFollowUp: Boolean(raw?.isFollowUp),
-  }
+function normalizeQuestionsArray(raw) {
+  const items = Array.isArray(raw?.questions) ? raw.questions : []
+
+  return items
+    .map((item) => ({
+      question: String(item?.question ?? '').trim(),
+      isFollowUp: Boolean(item?.isFollowUp),
+    }))
+    .filter((item) => item.question)
 }
 
 function normalizeFeedbackResponse(raw, params) {
@@ -204,6 +290,62 @@ function normalizeFeedbackResponse(raw, params) {
   }
 }
 
+async function fetchInitialQuestionBatch(role) {
+  const raw = await withRetry(() => callGemini(buildInitialQuestionsPrompt(role)))
+  const questions = normalizeQuestionsArray(raw)
+
+  if (!questions.length) {
+    throw new Error('Gemini returned an empty initial question batch')
+  }
+
+  questionCache.roleId = role?.id ?? null
+  questionCache.questions = questions
+
+  console.log(
+    `[geminiService] Cached ${questions.length} interview questions for session (single API call)`,
+  )
+}
+
+async function fetchRefillQuestionBatch(role, transcriptHistory) {
+  const raw = await withRetry(() =>
+    callGemini(buildRefillQuestionsPrompt(role, transcriptHistory)),
+  )
+  const questions = normalizeQuestionsArray(raw)
+
+  if (!questions.length) {
+    throw new Error('Gemini returned an empty refill question batch')
+  }
+
+  questionCache.questions.push(...questions)
+
+  console.log(
+    `[geminiService] Appended ${questions.length} questions to cache (single API call, total: ${questionCache.questions.length})`,
+  )
+}
+
+async function ensureQuestionAvailable(role, transcriptHistory, nextIndex) {
+  const roleId = role?.id ?? null
+
+  if (nextIndex === 0) {
+    resetQuestionCache(roleId)
+    await fetchInitialQuestionBatch(role)
+    return
+  }
+
+  if (questionCache.roleId !== roleId || questionCache.questions.length === 0) {
+    resetQuestionCache(roleId)
+    await fetchInitialQuestionBatch(role)
+  }
+
+  if (nextIndex >= questionCache.questions.length) {
+    await fetchRefillQuestionBatch(role, transcriptHistory)
+  }
+}
+
+function getCachedQuestion(nextIndex) {
+  return questionCache.questions[nextIndex] ?? null
+}
+
 export function getFallbackNextQuestion(role, transcriptHistory) {
   const questions = getQuestionsForRole(role?.id)
   const nextIndex = transcriptHistory.length
@@ -225,23 +367,43 @@ export function getFallbackOpeningQuestion(role) {
 }
 
 export async function generateNextQuestion({ role, transcriptHistory }) {
+  const nextIndex = transcriptHistory.length
+
   if (!isGeminiConfigured()) {
+    console.warn(
+      '[geminiService] MOCK FALLBACK: VITE_GEMINI_API_KEY is not set — serving offline question.',
+    )
     return getFallbackNextQuestion(role, transcriptHistory)
   }
 
-  try {
-    const raw = await withRetry(() =>
-      callGemini(buildInterviewerPrompt({ role, transcriptHistory })),
-    )
-    const normalized = normalizeQuestionResponse(raw)
+  if (nextIndex >= INTERVIEW_TARGET_ROUNDS) {
+    return {
+      question: '',
+      shouldEndInterview: true,
+      isFollowUp: false,
+      source: 'gemini',
+    }
+  }
 
-    if (!normalized.question) {
-      throw new Error('Gemini returned an empty question')
+  try {
+    await ensureQuestionAvailable(role, transcriptHistory, nextIndex)
+
+    const cached = getCachedQuestion(nextIndex)
+    if (!cached) {
+      throw new Error(`Question cache miss at index ${nextIndex}`)
     }
 
-    return { ...normalized, source: 'gemini' }
+    return {
+      question: cached.question,
+      shouldEndInterview: false,
+      isFollowUp: cached.isFollowUp,
+      source: 'gemini',
+    }
   } catch (error) {
-    console.warn('[geminiService] Falling back to mock question:', error)
+    console.warn(
+      '[geminiService] MOCK FALLBACK: All Gemini retries failed — serving offline question.',
+      error,
+    )
     return getFallbackNextQuestion(role, transcriptHistory)
   }
 }
@@ -255,7 +417,10 @@ export async function generateInterviewFeedback(params) {
     const raw = await withRetry(() => callGemini(buildFeedbackPrompt(params)))
     return normalizeFeedbackResponse(raw, params)
   } catch (error) {
-    console.warn('[geminiService] Falling back to mock feedback:', error)
+    console.warn(
+      '[geminiService] MOCK FALLBACK: Feedback generation failed — serving offline analysis.',
+      error,
+    )
     return { ...generateMockFeedback(params), source: 'mock' }
   }
 }
