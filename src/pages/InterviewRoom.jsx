@@ -1,8 +1,10 @@
+import { useEffect, useRef } from 'react'
 import AIMessage from '../components/AIMessage'
 import UserTranscript from '../components/UserTranscript'
 import WaveformVisualizer from '../components/WaveformVisualizer'
 import { INTERVIEW_STATES, STATE_LABELS } from '../constants/interviewStates'
 import { useInterviewStateMachine } from '../hooks/useInterviewStateMachine'
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis'
 import FeedbackDashboard from './FeedbackDashboard'
 
 function formatTime(totalSeconds) {
@@ -33,7 +35,30 @@ function InterviewRoom({ role, onExit, onRestart }) {
     toggleRecording,
   } = useInterviewStateMachine(role)
 
-  const canRecord = state === INTERVIEW_STATES.USER_SPEAKING && isSpeechSupported
+  const { speak, cancel, isSpeaking: isVoiceSpeaking } = useSpeechSynthesis()
+  const spokenKeyRef = useRef('')
+
+  useEffect(() => {
+    if (state !== INTERVIEW_STATES.AI_SPEAKING) return
+
+    const text = currentQuestion?.trim()
+    if (!text) return
+
+    const spokenKey = `${questionIndex}:${text}`
+    if (spokenKeyRef.current === spokenKey) return
+
+    spokenKeyRef.current = spokenKey
+    speak(text)
+  }, [currentQuestion, questionIndex, speak, state])
+
+  useEffect(() => {
+    return () => cancel()
+  }, [cancel])
+
+  const canRecord =
+    state === INTERVIEW_STATES.USER_SPEAKING &&
+    isSpeechSupported &&
+    !isVoiceSpeaking
 
   if (state === INTERVIEW_STATES.INTERVIEW_COMPLETE) {
     return (
@@ -142,6 +167,7 @@ function InterviewRoom({ role, onExit, onRestart }) {
             state={state}
             questionIndex={questionIndex}
             totalQuestions={totalQuestions}
+            isVoiceSpeaking={isVoiceSpeaking}
           />
         </section>
 
@@ -194,13 +220,15 @@ function InterviewRoom({ role, onExit, onRestart }) {
               <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-mirror-muted">
                 {isRecording
                   ? 'tap to stop'
-                  : !isSpeechSupported
-                    ? 'speech not supported'
-                    : canRecord
-                      ? 'tap to record'
-                      : isComplete
-                        ? 'interview complete'
-                        : 'wait for your turn'}
+                  : isVoiceSpeaking
+                    ? 'AI speaking...'
+                    : !isSpeechSupported
+                      ? 'speech not supported'
+                      : canRecord
+                        ? 'tap to record'
+                        : isComplete
+                          ? 'interview complete'
+                          : 'wait for your turn'}
               </p>
             </div>
           </div>

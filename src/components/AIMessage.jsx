@@ -1,6 +1,6 @@
 import { INTERVIEW_STATES } from '../constants/interviewStates'
 
-function AIMessage({ message, state, questionIndex, totalQuestions }) {
+function AIMessage({ message, state, questionIndex, totalQuestions, isVoiceSpeaking = false }) {
   const isSpeaking = state === INTERVIEW_STATES.AI_SPEAKING
   const isAnalyzing = state === INTERVIEW_STATES.AI_ANALYZING
 
@@ -54,6 +54,11 @@ function AIMessage({ message, state, questionIndex, totalQuestions }) {
               ? 'analyzing response'
               : 'standby'}
         </span>
+        {isVoiceSpeaking && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-mirror-accent/70 ai-speaking-dot">
+            AI Speaking...
+          </span>
+        )}
       </div>
 
       <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-mirror-muted">
