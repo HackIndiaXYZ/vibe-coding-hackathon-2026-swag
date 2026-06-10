@@ -1,21 +1,26 @@
-<<<<<<< HEAD
-# React + Vite
+# MirrorAI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+MirrorAI is an AI-powered interview preparation platform that simulates realistic mock interviews using voice AI and speech-to-text technology.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+* AI-generated interview questions
+* Voice-based AI interviewer
+* Speech-to-text answer capture
+* Dynamic interview flow
+* AI-powered feedback dashboard
+* Confidence and communication analysis
+* Offline fallback support
+* Optimized Gemini batching architecture
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+* React + Vite
+* Tailwind CSS
+* Gemini API
+* Web Speech API
+* Vercel
 
-## Expanding the ESLint configuration
+## Live Demo
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-=======
-# vibe-coding-hackathon-2026-swag
-Hackathon team repository for Swag - [hackindia-team:vibe-coding-hackathon-2026:swag]
->>>>>>> 050dc3214402298cdfdf234e4c74f0d7dc471764
+https://mirror-ai-five.vercel.app
